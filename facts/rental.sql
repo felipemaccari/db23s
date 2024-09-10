@@ -1,49 +1,144 @@
-WITH TimeRentals AS (
-    SELECT dt.DIM_TEMPO_SEQ_TEMPO,
-           f.FILM_ID,
-           cat.CATEGORY_ID,
-           s.STAFF_ID,
-           a.ACTOR_ID,
-           ad.ADDRESS_ID,
-           COUNT(r.rental_id) AS Total_Rentals,
-           SUM(p.amount) AS Total_Amount
-    FROM DIM_TEMPO dt
-    LEFT JOIN rental r ON (
-        (dt.DIM_TEMPO_MES IS NULL AND YEAR(r.rental_date) = dt.DIM_TEMPO_ANO)
-        OR (dt.DIM_TEMPO_MES IS NOT NULL AND YEAR(r.rental_date) = dt.DIM_TEMPO_ANO AND MONTH(r.rental_date) = dt.DIM_TEMPO_MES)
-    )
-    LEFT JOIN inventory i ON r.inventory_id = i.inventory_id
-    LEFT JOIN film f ON i.film_id = f.film_id
-    LEFT JOIN film_category fc ON f.film_id = fc.film_id
-    LEFT JOIN category cat ON fc.category_id = cat.category_id
-    LEFT JOIN payment p ON r.rental_id = p.rental_id
-    LEFT JOIN staff s ON r.staff_id = s.staff_id
-    LEFT JOIN address ad ON s.address_id = ad.address_id
-    LEFT JOIN DIM_ADDRESS da ON ad.address_id = da.ADDRESS_ID
-    LEFT JOIN film_actor fa ON f.film_id = fa.film_id
-    LEFT JOIN actor a ON fa.actor_id = a.actor_id
-    GROUP BY dt.DIM_TEMPO_SEQ_TEMPO, f.FILM_ID, cat.CATEGORY_ID, s.STAFF_ID, a.ACTOR_ID, ad.ADDRESS_ID
-)
+-- DROP DA TABELA FATURA CASO JÁ EXISTA
+DROP TABLE IF EXISTS FT_RENTAL;
 
-SELECT
-    dt.DIM_TEMPO_SEQ_TEMPO,
-    f.FILM_ID,
-    cat.CATEGORY_ID,
-    s.STAFF_ID,
-    a.ACTOR_ID,
-    ad.ADDRESS_ID,
-    COALESCE(tr.Total_Rentals, 0) AS Total_Rentals,
-    COALESCE(tr.Total_Amount, 0) AS Total_Amount
-FROM DIM_TEMPO dt
-LEFT JOIN DIM_FILM f ON 1 = 1 
-LEFT JOIN DIM_CATEGORY cat ON 1 = 1 
-LEFT JOIN DIM_STAFF s ON 1 = 1 
-LEFT JOIN DIM_ACTOR a ON 1 = 1 
-LEFT JOIN DIM_ADDRESS ad ON 1 = 1
-LEFT JOIN TimeRentals tr ON dt.DIM_TEMPO_SEQ_TEMPO = tr.DIM_TEMPO_SEQ_TEMPO
-                        AND f.FILM_ID = tr.FILM_ID
-                        AND cat.CATEGORY_ID = tr.CATEGORY_ID
-                        AND s.STAFF_ID = tr.STAFF_ID
-                        AND a.ACTOR_ID = tr.ACTOR_ID
-                        AND ad.ADDRESS_ID = tr.ADDRESS_ID
-ORDER BY dt.DIM_TEMPO_SEQ_TEMPO, f.FILM_ID, cat.CATEGORY_ID, s.STAFF_ID, a.ACTOR_ID, ad.ADDRESS_ID;
+-- CRIAÇÃO DA TABELA FATO FT_RENTAL
+CREATE TABLE FT_RENTAL
+(
+    TIME INT NOT NULL,               -- Chave Tempo
+    FILM_ID INT NULL,                -- Chave do Filme
+    CATEGORY_ID INT NULL,            -- Chave da Categoria
+    QUANTITY INT NOT NULL,           -- Quantidade de Aluguéis
+    AMOUNT DECIMAL(10, 2) NOT NULL,  -- Valor Total do Aluguel
+);
+
+-- Verificar se a Procedure já existe, se SIM, fazer o DROP e recriar
+IF EXISTS (
+  SELECT * 
+  FROM INFORMATION_SCHEMA.ROUTINES 
+  WHERE SPECIFIC_NAME = N'PROC_ETL_FT_RENTAL' 
+)
+  DROP PROCEDURE PROC_ETL_FT_RENTAL;
+
+-- Criando a Procedure para popular FT_RENTAL
+CREATE PROCEDURE DBO.PROC_ETL_FT_RENTAL
+AS
+BEGIN
+  -- Variáveis de controle
+  DECLARE 
+    @TIME INT,
+    @FILM_ID INT,
+    @CATEGORY_ID INT,
+    @QUANTITY INT,
+    @AMOUNT DECIMAL(10, 2),
+    @V_DSC_DADOS_PROCESSAMENTO VARCHAR(2000);
+
+  -- Declaração do Cursor para capturar os dados do select
+  DECLARE CUR_GET_RENTAL CURSOR FOR
+  WITH TESTE AS (
+    SELECT
+        dt.DIM_TEMPO_SEQ_TEMPO AS TIME,
+        NULL AS FILM_ID,
+        NULL AS CATEGORY_ID,
+        COALESCE(COUNT(r.rental_id), 0) AS QUANTITY,
+        COALESCE(SUM(f.RENTAL_RATE), 0) AS AMOUNT
+    FROM DIM_TEMPO dt
+    LEFT JOIN RENTAL r
+        ON (YEAR(r.RENTAL_DATE) = dt.DIM_TEMPO_ANO)
+        AND (dt.DIM_TEMPO_MES IS NULL)
+    LEFT JOIN INVENTORY i
+        ON r.INVENTORY_ID = i.INVENTORY_ID
+    LEFT JOIN FILM f
+        ON i.FILM_ID = f.FILM_ID
+    WHERE dt.DIM_TEMPO_MES IS NULL
+    GROUP BY dt.DIM_TEMPO_SEQ_TEMPO
+
+    UNION ALL
+
+    SELECT
+        dt.DIM_TEMPO_SEQ_TEMPO AS TIME,
+        NULL AS FILM_ID,
+        NULL AS CATEGORY_ID,
+        COALESCE(COUNT(r.rental_id), 0) AS QUANTITY,
+        COALESCE(SUM(f.RENTAL_RATE), 0) AS AMOUNT
+    FROM DIM_TEMPO dt
+    LEFT JOIN RENTAL r
+        ON (YEAR(r.RENTAL_DATE) = dt.DIM_TEMPO_ANO)
+        AND (MONTH(r.RENTAL_DATE) = dt.DIM_TEMPO_MES)
+    LEFT JOIN INVENTORY i
+        ON r.INVENTORY_ID = i.INVENTORY_ID
+    LEFT JOIN FILM f
+        ON i.FILM_ID = f.FILM_ID
+    WHERE dt.DIM_TEMPO_MES IS NOT NULL
+    GROUP BY dt.DIM_TEMPO_SEQ_TEMPO
+
+    UNION ALL
+
+    SELECT
+        dt.DIM_TEMPO_SEQ_TEMPO AS TIME,
+        f.FILM_ID,
+        cat.CATEGORY_ID,
+        COALESCE(COUNT(r.rental_id), 0) AS QUANTITY,
+        COALESCE(SUM(p.amount), 0) AS AMOUNT
+    FROM DIM_TEMPO dt
+    CROSS JOIN FILM f
+    INNER JOIN FILM_CATEGORY fc
+        ON f.FILM_ID = fc.FILM_ID
+    INNER JOIN DIM_CATEGORY cat
+        ON fc.CATEGORY_ID = cat.CATEGORY_ID
+    LEFT JOIN INVENTORY i
+        ON i.FILM_ID = f.FILM_ID
+    LEFT JOIN RENTAL r
+        ON r.INVENTORY_ID = i.INVENTORY_ID
+        AND YEAR(r.RENTAL_DATE) = dt.DIM_TEMPO_ANO
+        AND (dt.DIM_TEMPO_MES IS NULL OR MONTH(r.RENTAL_DATE) = dt.DIM_TEMPO_MES)
+    LEFT JOIN PAYMENT p
+        ON r.RENTAL_ID = p.RENTAL_ID
+    WHERE (dt.DIM_TEMPO_MES IS NULL AND dt.DIM_TEMPO_ANO IS NOT NULL)
+       OR (dt.DIM_TEMPO_MES IS NOT NULL AND dt.DIM_TEMPO_ANO IS NOT NULL)
+    GROUP BY dt.DIM_TEMPO_SEQ_TEMPO, f.FILM_ID, cat.CATEGORY_ID
+  )
+  SELECT TIME, FILM_ID, CATEGORY_ID, QUANTITY, AMOUNT
+  FROM TESTE;
+
+  -- Abrindo o cursor
+  OPEN CUR_GET_RENTAL;
+  
+  -- Captura do primeiro registro
+  FETCH NEXT FROM CUR_GET_RENTAL INTO @TIME, @FILM_ID, @CATEGORY_ID, @QUANTITY, @AMOUNT;
+
+  -- Loop para processar todos os registros
+  WHILE (@@FETCH_STATUS = 0)
+  BEGIN
+    -- Informações de processamento
+    SET @V_DSC_DADOS_PROCESSAMENTO = 'TIME ' + CAST(@TIME AS VARCHAR) + ', FILM ' + ISNULL(CAST(@FILM_ID AS VARCHAR), 'NULL') + ', CATEGORY ' + ISNULL(CAST(@CATEGORY_ID AS VARCHAR), 'NULL');
+    
+    BEGIN TRANSACTION;
+      -- Inserir os dados na tabela FT_RENTAL
+      INSERT INTO FT_RENTAL (TIME, FILM_ID, CATEGORY_ID, QUANTITY, AMOUNT)
+      VALUES (@TIME, @FILM_ID, @CATEGORY_ID, @QUANTITY, @AMOUNT);
+
+      -- Tratamento de erro
+      IF @@ERROR <> 0
+      BEGIN
+        ROLLBACK;
+        SELECT @V_DSC_DADOS_PROCESSAMENTO;
+        CLOSE CUR_GET_RENTAL;
+        DEALLOCATE CUR_GET_RENTAL;
+        RETURN;
+      END
+    COMMIT;
+
+    -- Capturar próximo registro
+    FETCH NEXT FROM CUR_GET_RENTAL INTO @TIME, @FILM_ID, @CATEGORY_ID, @QUANTITY, @AMOUNT;
+  END
+
+  -- Fechar cursor e liberar recursos
+  CLOSE CUR_GET_RENTAL;
+  DEALLOCATE CUR_GET_RENTAL;
+END;
+
+-- Executar a procedure para popular a tabela FT_RENTAL
+EXEC PROC_ETL_FT_RENTAL;
+
+-- Verificar os dados inseridos
+SELECT * FROM FT_RENTAL;
