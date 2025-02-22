@@ -1,3 +1,5 @@
+-- Quantidade e valor total de empréstimos, possibilitando uma visão hierárquica ao longo do tempo
+
 IF EXISTS (
   SELECT * 
   FROM INFORMATION_SCHEMA.ROUTINES 

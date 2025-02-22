@@ -1,3 +1,5 @@
+-- Análise de quantidade de empréstimos realizados agrupados por filme, categoria ao longo do tempo
+
 IF EXISTS (
   SELECT * 
   FROM INFORMATION_SCHEMA.ROUTINES 
