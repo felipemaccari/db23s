@@ -1,12 +1,14 @@
-DROP TABLE IF EXISTS DIM_CUSTOMER
+-- Remove a tabela DIM_CUSTOMER se já existir
+DROP TABLE IF EXISTS DIM_CUSTOMER;
 
--- CRIAÇÃO DA TABELA DE DIMENSÃO CLIENTE
-CREATE TABLE DIM_CUSTOMER
-(
-  CUSTOMER_ID  INT NOT NULL,
-  FIRST_NAME VARCHAR(25) NOT NULL,
-  LAST_UPDATE DATETIME NOT NULL,
-  CONSTRAINT PKCUSTOMER_ID PRIMARY KEY (CUSTOMER_ID ASC)
+-- Criação da tabela de dimensão CLIENTE
+CREATE TABLE DIM_CUSTOMER (
+    CUSTOMER_ID  INT NOT NULL,                  -- Chave primária do cliente
+    FIRST_NAME VARCHAR(25) NOT NULL,            -- Primeiro nome do cliente
+    LAST_NAME VARCHAR(25) NOT NULL,             -- Sobrenome do cliente
+    ADDRESS_ID INT NOT NULL,                    -- Chave estrangeira para a dimensão de endereço (DM_ADDRESS)
+    LAST_UPDATE DATETIME NOT NULL,              -- Data da última atualização
+    CONSTRAINT PKCUSTOMER_ID PRIMARY KEY (CUSTOMER_ID ASC)  -- Chave primária
 );
 
 -- Bloco utilizado para verificar se a SP já existe. Se SIM, o banco fará um DROP da SP e irá recriar.
@@ -24,12 +26,14 @@ AS
 BEGIN
   -- DECLARAÇÃO DAS VARIÁVEIS DE LOG E CONTROLE
   DECLARE
-    --VARIÁVEIS DE TABELA
+    -- VARIÁVEIS DE TABELA
     @V_CUSTOMER_ID INT,
     @V_FIRST_NAME VARCHAR(25),
+    @V_LAST_NAME VARCHAR(25),
+    @V_ADDRESS_ID INT,
     @V_LAST_UPDATE DATETIME,
     
-    --VARIÁVEIS DE CONTROLE DE DADOS PROCESSADOS
+    -- VARIÁVEIS DE CONTROLE DE DADOS PROCESSADOS
     @V_DSC_DADOS_PROCESSAMENTO VARCHAR(2000);
 
   -- DECLARAÇÃO DO CURSOR
@@ -37,6 +41,8 @@ BEGIN
   SELECT
     ORIGEM.CUSTOMER_ID,
     ORIGEM.FIRST_NAME,
+    ORIGEM.LAST_NAME,
+    ORIGEM.ADDRESS_ID,
     ORIGEM.LAST_UPDATE
   FROM customer AS ORIGEM
   WHERE NOT EXISTS (SELECT DIM.CUSTOMER_ID
@@ -51,6 +57,8 @@ BEGIN
   INTO
     @V_CUSTOMER_ID,
     @V_FIRST_NAME,
+    @V_LAST_NAME,
+    @V_ADDRESS_ID,
     @V_LAST_UPDATE;
 
   -- LOOP QUE IRÁ EXECUTAR ENQUANTO HOUVER LINHAS NO CURSOR PARA SEREM PROCESSADAS
@@ -58,13 +66,15 @@ BEGIN
   BEGIN
     -- ATRIBUI VALORES PROCESSADOS
     SET @V_DSC_DADOS_PROCESSAMENTO = 'CUSTOMER_ID ' + CAST(@V_CUSTOMER_ID AS VARCHAR) + CHAR(13) + CHAR(10) +
-                                     'FIRST_NAME ' + CAST(@V_FIRST_NAME AS VARCHAR);
+                                     'FIRST_NAME ' + CAST(@V_FIRST_NAME AS VARCHAR) + CHAR(13) + CHAR(10) +
+                                     'LAST_NAME ' + CAST(@V_LAST_NAME AS VARCHAR) + CHAR(13) + CHAR(10) +
+                                     'ADDRESS_ID ' + CAST(@V_ADDRESS_ID AS VARCHAR);
                                      
     BEGIN TRANSACTION;
          INSERT INTO DIM_CUSTOMER
-         (CUSTOMER_ID, FIRST_NAME, LAST_UPDATE)
+         (CUSTOMER_ID, FIRST_NAME, LAST_NAME, ADDRESS_ID, LAST_UPDATE)
          VALUES
-         (@V_CUSTOMER_ID, @V_FIRST_NAME, @V_LAST_UPDATE);
+         (@V_CUSTOMER_ID, @V_FIRST_NAME, @V_LAST_NAME, @V_ADDRESS_ID, @V_LAST_UPDATE);
            
          -- TRATAMENTO DE ERRO
          IF @@ERROR <> 0
@@ -85,6 +95,8 @@ BEGIN
     INTO
       @V_CUSTOMER_ID,
       @V_FIRST_NAME,
+      @V_LAST_NAME,
+      @V_ADDRESS_ID,
       @V_LAST_UPDATE;
   END -- WHILE
   
@@ -93,8 +105,8 @@ BEGIN
   DEALLOCATE CUR_GET_CUSTOMER;
 END;
 
+-- Executa a procedure para popular a tabela DIM_CUSTOMER
+EXEC PROC_ETL_CUSTOMER;
 
-EXEC PROC_ETL_CUSTOMER
-
-
-SELECT * FROM DIM_CUSTOMER
+-- Seleciona os dados da tabela DIM_CUSTOMER para verificação
+SELECT * FROM DIM_CUSTOMER;
