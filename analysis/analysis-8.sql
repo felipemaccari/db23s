@@ -1,0 +1,108 @@
+-- Análise dos empréstimos realizados e que não foram pagos e devolvidos, considerando lucro versus prejuízo
+
+-- Verifica se a procedure já existe e a remove
+IF EXISTS (
+  SELECT * 
+  FROM INFORMATION_SCHEMA.ROUTINES 
+  WHERE SPECIFIC_NAME = N'PROC_ETL_FT_RENTAL_ANALISE8' 
+)
+  DROP PROCEDURE PROC_ETL_FT_RENTAL_ANALISE8;
+
+-- Cria a procedure para popular FT_RENTAL para a análise 8
+CREATE PROCEDURE DBO.PROC_ETL_FT_RENTAL_ANALISE8
+AS
+BEGIN
+  -- Declaração das variáveis
+  DECLARE
+    @RENTAL_ID INT,
+    @AMOUNT_PAGO DECIMAL(10, 2),
+    @AMOUNT_NAO_PAGO DECIMAL(10, 2),
+    @STATUS_PAGAMENTO VARCHAR(20),
+    @V_DSC_DADOS_PROCESSAMENTO VARCHAR(2000);
+
+  -- Cursor para capturar os dados
+  DECLARE CUR_GET_RENTAL CURSOR FOR
+  SELECT
+      r.RENTAL_ID,
+      ISNULL(SUM(p.AMOUNT), 0) AS AMOUNT_PAGO,
+      CASE
+          WHEN r.RETURN_DATE IS NULL THEN f.REPLACEMENT_COST
+          ELSE 0
+      END AS AMOUNT_NAO_PAGO,
+      CASE
+          WHEN SUM(p.AMOUNT) > 0 THEN 'Pago'
+          ELSE 'Não Pago'
+      END AS STATUS_PAGAMENTO
+  FROM
+      RENTAL r
+      LEFT JOIN PAYMENT p ON r.RENTAL_ID = p.RENTAL_ID
+      JOIN INVENTORY i ON r.INVENTORY_ID = i.INVENTORY_ID
+      JOIN FILM f ON i.FILM_ID = f.FILM_ID
+  GROUP BY
+      r.RENTAL_ID,
+      r.RETURN_DATE,
+      f.REPLACEMENT_COST;
+
+  -- Abre o cursor
+  OPEN CUR_GET_RENTAL;
+
+  -- Captura o primeiro registro
+  FETCH NEXT FROM CUR_GET_RENTAL INTO @RENTAL_ID, @AMOUNT_PAGO, @AMOUNT_NAO_PAGO, @STATUS_PAGAMENTO;
+
+  -- Loop para processar todos os registros
+  WHILE (@@FETCH_STATUS = 0)
+  BEGIN
+    -- Informações de processamento
+    SET @V_DSC_DADOS_PROCESSAMENTO = 'RENTAL ' + CAST(@RENTAL_ID AS VARCHAR);
+
+    BEGIN TRANSACTION;
+      -- Insere os dados na FT_RENTAL
+      INSERT INTO FT_RENTAL (
+          TIME, FILM_ID, CATEGORY_ID, CUSTOMER_ID, STAFF_ID, STORE_ID, INVENTORY_ID, ACTOR_ID, QUANTITY, AMOUNT, STATUS_PAGAMENTO, LUCRO_PREJUIZO
+      )
+      VALUES (
+          0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1, @AMOUNT_PAGO, @STATUS_PAGAMENTO, @AMOUNT_PAGO - @AMOUNT_NAO_PAGO
+      );
+
+      -- Tratamento de erro
+      IF @@ERROR <> 0
+      BEGIN
+        ROLLBACK;
+        SELECT @V_DSC_DADOS_PROCESSAMENTO;
+        CLOSE CUR_GET_RENTAL;
+        DEALLOCATE CUR_GET_RENTAL;
+        RETURN;
+      END
+    COMMIT;
+
+    -- Captura o próximo registro
+    FETCH NEXT FROM CUR_GET_RENTAL INTO @RENTAL_ID, @AMOUNT_PAGO, @AMOUNT_NAO_PAGO, @STATUS_PAGAMENTO;
+  END
+
+  -- Fecha o cursor e libera recursos
+  CLOSE CUR_GET_RENTAL;
+  DEALLOCATE CUR_GET_RENTAL;
+END;
+
+-- Executa a procedure
+EXEC DBO.PROC_ETL_FT_RENTAL_ANALISE8;
+
+-- Consulta final para retornar o lucro e prejuízo dos empréstimos
+SELECT
+    STATUS_PAGAMENTO,
+    COUNT(*) AS QUANTIDADE_EMPRESTIMOS,
+    SUM(AMOUNT) AS TOTAL_PAGO,
+    SUM(LUCRO_PREJUIZO) AS LUCRO_PREJUIZO_TOTAL
+FROM
+    FT_RENTAL
+WHERE
+    TIME = 0
+    AND FILM_ID IS NULL
+    AND CATEGORY_ID IS NULL
+    AND CUSTOMER_ID IS NULL
+    AND STAFF_ID IS NULL
+    AND STORE_ID IS NULL
+    AND INVENTORY_ID IS NULL
+    AND ACTOR_ID IS NULL
+GROUP BY
+    STATUS_PAGAMENTO;
